@@ -1,0 +1,122 @@
+# ------------------------------------------------------------------------------
+# BUILD ARTIFACTS
+# ------------------------------------------------------------------------------
+# CMake build directories
+/build/
+/build-*/
+/cmake-build-*/
+
+# Makefile outputs
+*.o
+*.a
+*.so
+*.so.*
+*.la
+*.lo
+
+# Ninja build files
+.ninja_deps
+.ninja_log
+
+# General compiled binaries
+*.out
+*.elf
+*.bin
+*.exe
+
+# ------------------------------------------------------------------------------
+# EDITOR / IDE FILES
+# ------------------------------------------------------------------------------
+# VS Code
+.vscode/
+.history/
+.code-profile/
+*.code-workspace
+
+# CLion / JetBrains (if opened once)
+.idea/
+
+# ------------------------------------------------------------------------------
+# PLATFORMIO (if used anywhere)
+# ------------------------------------------------------------------------------
+.pio/
+.pioenvs/
+.piolibdeps/
+.pio-build/
+
+# ------------------------------------------------------------------------------
+# RASPBERRY PI / LINUX SYSTEM FILES
+# ------------------------------------------------------------------------------
+# Python cache (if you add helpers)
+__pycache__/
+*.pyc
+
+# macOS cruft (if editing on Mac)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows cruft (if repo touched by Windows)
+Thumbs.db
+Desktop.ini
+
+# Swap files
+*.swp
+*.swo
+*~
+
+# ------------------------------------------------------------------------------
+# LOGS / TEMPORARY / RUNTIME DATA
+# ------------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.dat
+
+# Serial debug logs or custom dumps
+*.dump
+*.trace
+
+# ------------------------------------------------------------------------------
+# LIBRARIES / DEPENDENCIES
+# ------------------------------------------------------------------------------
+# If you download external libs locally instead of system-wide
+lib/
+deps/
+external/
+
+# ------------------------------------------------------------------------------
+# ENV / CREDENTIALS FILES
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.secret
+*.key
+*.pem
+
+# ------------------------------------------------------------------------------
+# MISC / OPTIONAL
+# ------------------------------------------------------------------------------
+# CCache
+.ccache/
+
+# GDB history
+.gdb_history
+
+# Core dumps
+core
+core.*
+
+# Coverage files
+*.gcda
+*.gcno
+*.gcov
+
+# ------------------------------------------------------------------------------
+# DO NOT IGNORE YOUR SOURCE CODE!
+# ------------------------------------------------------------------------------
+# Keep these:
+# src/
+# include/
+# CMakeLists.txt
+# main.cpp (or your source entry)
