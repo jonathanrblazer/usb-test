@@ -66,22 +66,12 @@ int configureSerial(int fd) {
 // Thread: read incoming bytes from Teensy
 // -----------------------------------------------------
 void readThread(int fd) {
-    unsigned char buf[512];
+    char buf[512];
     while (running.load()) {
         int n = read(fd, buf, sizeof(buf));
         if (n > 0) {
-            // Interpret incoming data as 16-bit signed values
-            // and print each padded to 5 digits.
-            for (int i = 0; i < n; i += 2) {
-                if (i + 1 < n) {
-                    // Combine two bytes into a signed short (little-endian)
-                    short val = (short)((buf[i+1] << 8) | buf[i]);
-
-                    // Print with 5-digit padding (including negative values)
-                    std::cout << std::setw(5) << val << " ";
-                }
-            }
-            std::cout << "\n";
+            // Trea incoming data as TEXT
+            std::cout.write(buf, n);
             std::cout.flush();
         }
     }
