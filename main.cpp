@@ -61,34 +61,37 @@ int openSPI() {
 }
 
 void sendImageSPI(int fd, const std::vector<int16_t>& img) {
-
-    // uint8_t TESTX[] = {0xAA, 0x55, 0xFF, 0x00};
-    if (img.size() < COLS) {
-        std::cerr << "Image too small\n";
-        return;
-    }
-
-    const uint8_t* row0 =
+    const uint8_t* p =
         reinterpret_cast<const uint8_t*>(img.data());
+    size_t total = img.size() * sizeof(int16_t);
 
-    size_t len = COLS * sizeof(int16_t); // 72 * 2 = 144 bytes
+    const size_t CHUNK = 256;  // conservative, safe everywhere
+    size_t offset = 0;
 
-    spi_ioc_transfer tr{};
-    tr.tx_buf = (unsigned long)row0;
-    // tr.tx_buf = (unsigned long)TESTX;
-    // tr.len = img.size() * sizeof(int16_t);
-    tr.len = len;
-    // tr.len = sizeof(TESTX);
-    tr.speed_hz = SPI_SPEED;
-    tr.bits_per_word = SPI_BITS;
-    
-    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
-    if (ret < 1) {
-        perror("SPI row send");
-    } else {
-        std::cout << "SPI row send ret=" << ret << "\n";
+    std::cout << "SPI sending image in chunks, total "
+              << total << " bytes\n";
+
+    while (offset < total) {
+        size_t n = std::min(CHUNK, total - offset);
+
+        spi_ioc_transfer tr{};
+        tr.tx_buf = (unsigned long)(p + offset);
+        tr.len = n;
+        tr.speed_hz = SPI_SPEED;
+        tr.bits_per_word = SPI_BITS;
+
+        int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
+        if (ret < 1) {
+            perror("SPI chunk send");
+            return;
+        }
+
+        offset += n;
     }
+
+    std::cout << "SPI image sent OK\n";
 }
+
 
 // ---------------- IMAGE PRINT ----------------
 void printImage(const std::vector<int16_t>& img) {
@@ -106,7 +109,7 @@ void readThread(int serial_fd, int spi_fd) {
     char tmp[512];
 
     bool inImage = false;
-    int row = 0;
+    // int row = 0;
     std::vector<int16_t> image;
     image.reserve(ROWS * COLS);
 
@@ -123,7 +126,7 @@ void readThread(int serial_fd, int spi_fd) {
 
             if (line.find("DEBUGMODE 106") != std::string::npos) {
                 image.clear();
-                row = 0;
+                // row = 0;
                 inImage = true;
                 continue;
             }
