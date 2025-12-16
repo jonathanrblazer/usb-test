@@ -61,12 +61,33 @@ int openSPI() {
 }
 
 void sendImageSPI(int fd, const std::vector<int16_t>& img) {
+
+    // uint8_t TESTX[] = {0xAA, 0x55, 0xFF, 0x00};
+    if (img.size() < COLS) {
+        std::cerr << "Image too small\n";
+        return;
+    }
+
+    const uint8_t* row0 =
+        reinterpret_cast<const uint8_t*>(img.data());
+
+    size_t len = COLS * sizeof(int16_t); // 72 * 2 = 144 bytes
+
     spi_ioc_transfer tr{};
-    tr.tx_buf = (unsigned long)img.data();
-    tr.len = img.size() * sizeof(int16_t);
+    tr.tx_buf = (unsigned long)row0;
+    // tr.tx_buf = (unsigned long)TESTX;
+    // tr.len = img.size() * sizeof(int16_t);
+    tr.len = len;
+    // tr.len = sizeof(TESTX);
     tr.speed_hz = SPI_SPEED;
     tr.bits_per_word = SPI_BITS;
-    ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
+    
+    int ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
+    if (ret < 1) {
+        perror("SPI row send");
+    } else {
+        std::cout << "SPI row send ret=" << ret << "\n";
+    }
 }
 
 // ---------------- IMAGE PRINT ----------------
