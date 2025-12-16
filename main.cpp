@@ -65,7 +65,7 @@ void sendImageSPI(int fd, const std::vector<int16_t>& img) {
         reinterpret_cast<const uint8_t*>(img.data());
     size_t total = img.size() * sizeof(int16_t);
 
-    const size_t CHUNK = 256;  // conservative, safe everywhere
+    const size_t CHUNK = 512;  // conservative, safe everywhere
     size_t offset = 0;
 
     std::cout << "SPI sending image in chunks, total "
