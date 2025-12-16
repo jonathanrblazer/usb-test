@@ -2,147 +2,167 @@
 #include <string>
 #include <thread>
 #include <atomic>
-#include <iomanip>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 #include <dirent.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <linux/spi/spidev.h>
 
+// ---------------- CONFIG ----------------
+static const int ROWS = 72;
+static const int COLS = 72;
 static const int BAUDRATE = B115200;
+static const char *SPI_DEV = "/dev/spidev0.0";
+static const uint32_t SPI_SPEED = 1000000;
+static const uint8_t SPI_MODE = 3;
+static const uint8_t SPI_BITS = 8;
+
+// ----------------------------------------
 std::atomic<bool> running(true);
 
-// -----------------------------------------------------
-// Scan /dev for all ttyACM* devices
-// -----------------------------------------------------
+// ---------------- SERIAL HELPERS ----------------
 std::vector<std::string> findACMports() {
     std::vector<std::string> ports;
     DIR* dir = opendir("/dev");
     if (!dir) return ports;
-
-    struct dirent* entry;
+    dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
-        std::string name = entry->d_name;
-        if (name.rfind("ttyACM", 0) == 0) {  // starts with "ttyACM"
-            ports.emplace_back("/dev/" + name);
-        }
+        if (std::string(entry->d_name).rfind("ttyACM", 0) == 0)
+            ports.emplace_back("/dev/" + std::string(entry->d_name));
     }
     closedir(dir);
     return ports;
 }
 
-// -----------------------------------------------------
-// Configure the serial port
-// -----------------------------------------------------
 int configureSerial(int fd) {
-    struct termios tty;
-
-    if (tcgetattr(fd, &tty) != 0) {
-        perror("tcgetattr");
-        return -1;
-    }
-
+    termios tty{};
+    if (tcgetattr(fd, &tty) != 0) return -1;
     cfmakeraw(&tty);
     cfsetspeed(&tty, BAUDRATE);
-
     tty.c_cflag |= (CLOCAL | CREAD);
-    tty.c_cflag &= ~CSTOPB;
-    tty.c_cflag &= ~CRTSCTS;  // No hardware flow control for Teensy USB
-
-    tty.c_cc[VMIN]  = 1;  
+    tty.c_cflag &= ~CRTSCTS;
+    tty.c_cc[VMIN] = 1;
     tty.c_cc[VTIME] = 0;
-
-    tcflush(fd, TCIFLUSH);
-
-    if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-        perror("tcsetattr");
-        return -1;
-    }
-    return 0;
+    return tcsetattr(fd, TCSANOW, &tty);
 }
 
-// -----------------------------------------------------
-// Thread: read incoming bytes from Teensy
-// -----------------------------------------------------
-void readThread(int fd) {
-    char buf[512];
+// ---------------- SPI HELPERS ----------------
+int openSPI() {
+    int fd = open(SPI_DEV, O_WRONLY);
+    if (fd < 0) return -1;
+    ioctl(fd, SPI_IOC_WR_MODE, &SPI_MODE);
+    ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &SPI_BITS);
+    ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &SPI_SPEED);
+    return fd;
+}
+
+void sendImageSPI(int fd, const std::vector<int16_t>& img) {
+    spi_ioc_transfer tr{};
+    tr.tx_buf = (unsigned long)img.data();
+    tr.len = img.size() * sizeof(int16_t);
+    tr.speed_hz = SPI_SPEED;
+    tr.bits_per_word = SPI_BITS;
+    ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
+}
+
+// ---------------- IMAGE PRINT ----------------
+void printImage(const std::vector<int16_t>& img) {
+    for (int r = 0; r < ROWS; ++r) {
+        std::cout << "R" << std::setw(2) << std::setfill('0') << r << ": ";
+        for (int c = 0; c < COLS; ++c)
+            std::cout << std::setw(6) << img[r*COLS + c] << " ";
+        std::cout << "\n";
+    }
+}
+
+// ---------------- SERIAL READ THREAD ----------------
+void readThread(int serial_fd, int spi_fd) {
+    std::string buffer;
+    char tmp[512];
+
+    bool inImage = false;
+    int row = 0;
+    std::vector<int16_t> image;
+    image.reserve(ROWS * COLS);
+
     while (running.load()) {
-        int n = read(fd, buf, sizeof(buf));
-        if (n > 0) {
-            // Trea incoming data as TEXT
-            std::cout.write(buf, n);
-            std::cout.flush();
+        int n = read(serial_fd, tmp, sizeof(tmp));
+        if (n <= 0) continue;
+
+        buffer.append(tmp, n);
+
+        size_t pos;
+        while ((pos = buffer.find('\n')) != std::string::npos) {
+            std::string line = buffer.substr(0, pos);
+            buffer.erase(0, pos + 1);
+
+            if (line.find("DEBUGMODE 106") != std::string::npos) {
+                image.clear();
+                row = 0;
+                inImage = true;
+                continue;
+            }
+
+            if (line.find("END_DEBUGMODE_106") != std::string::npos) {
+                inImage = false;
+                if ((int)image.size() == ROWS * COLS) {
+                    printImage(image);
+                    sendImageSPI(spi_fd, image);
+                    std::cout << ">>> Image forwarded to SPI (" 
+                              << image.size() << " pixels)\n";
+                } else {
+                    std::cerr << "Incomplete image: got "
+                              << image.size() << " values\n";
+                }
+                continue;
+            }
+
+            if (!inImage) continue;
+
+            std::stringstream ss(line);
+            int val;
+            while (ss >> val && image.size() < ROWS * COLS)
+                image.push_back((int16_t)val);
         }
     }
 }
 
-// -----------------------------------------------------
-// MAIN PROGRAM
-// -----------------------------------------------------
+// ---------------- MAIN ----------------
 int main() {
-    // Step 1: find available ACM ports
     auto ports = findACMports();
-
     if (ports.empty()) {
-        std::cerr << "ERROR: No /dev/ttyACM* ports found.\n";
+        std::cerr << "No ttyACM devices found.\n";
         return 1;
     }
 
-    std::string selectedPort;
-
-    if (ports.size() == 1) {
-        selectedPort = ports[0];
-        std::cout << "Found 1 ACM device: " << selectedPort << "\n";
-    } else {
-        std::cout << "Multiple ACM devices detected:\n";
-        for (size_t i = 0; i < ports.size(); i++) {
-            std::cout << "  [" << i << "] " << ports[i] << "\n";
-        }
-        std::cout << "Enter the number of the device to use: ";
-        size_t choice;
-        std::cin >> choice;
-
-        // if cin was used, flush newline before getline loop begins later
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-
-        if (choice >= ports.size()) {
-            std::cerr << "Invalid choice.\n";
-            return 1;
-        }
-        selectedPort = ports[choice];
-    }
-
-    std::cout << "Opening " << selectedPort << "...\n";
-
-    int fd = open(selectedPort.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (fd < 0) {
-        perror("open");
+    std::string port = ports[0];
+    int serial_fd = open(port.c_str(), O_RDWR | O_NOCTTY);
+    if (serial_fd < 0 || configureSerial(serial_fd) < 0) {
+        std::cerr << "Failed to open serial.\n";
         return 1;
     }
 
-    if (configureSerial(fd) < 0) {
+    int spi_fd = openSPI();
+    if (spi_fd < 0) {
+        std::cerr << "Failed to open SPI.\n";
         return 1;
     }
 
-    std::cout << "Serial port opened.\n";
-    std::cout << "Type commands (e.g., debugmode(111); ) and press Enter.\n";
-    std::cout << "------------------------------------------------------\n";
+    std::thread reader(readThread, serial_fd, spi_fd);
 
-    // Launch receiver thread
-    std::thread reader(readThread, fd);
-
-    // Main loop for sending user commands
-    std::string line;
-    while (running.load()) {
-        if (!std::getline(std::cin, line)) break;
-        line += "\n";  // Teensy expects newline terminated commands
-        ssize_t written = write(fd, line.c_str(), line.size());
-        if (written < 0) perror("write");
+    std::string cmd;
+    while (std::getline(std::cin, cmd)) {
+        cmd += "\n";
+        write(serial_fd, cmd.c_str(), cmd.size());
     }
 
     running.store(false);
     reader.join();
-    close(fd);
+    close(serial_fd);
+    close(spi_fd);
     return 0;
 }
