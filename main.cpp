@@ -17,7 +17,7 @@ static const int ROWS = 72;
 static const int COLS = 72;
 static const int BAUDRATE = B115200;
 static const char *SPI_DEV = "/dev/spidev0.0";
-static const uint32_t SPI_SPEED = 1000000;
+static const uint32_t SPI_SPEED = 16000000;      // OH SNAPPPP
 static const uint8_t SPI_MODE = 3;
 static const uint8_t SPI_BITS = 8;
 
