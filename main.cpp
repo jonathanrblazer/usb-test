@@ -110,8 +110,8 @@ void readThread(int serial_fd, int spi_fd) {
 
     bool inImage = false;
     // int row = 0;
-    std::vector<int16_t> image;
-    image.reserve(ROWS * COLS);
+    std::vector<int16_t> images;
+    images.reserve(2 * ROWS * COLS);
 
     while (running.load()) {
         int n = read(serial_fd, tmp, sizeof(tmp));
@@ -125,7 +125,7 @@ void readThread(int serial_fd, int spi_fd) {
             buffer.erase(0, pos + 1);
 
             if (line.find("DEBUGMODE 106") != std::string::npos) {
-                image.clear();
+                images.clear();
                 // row = 0;
                 inImage = true;
                 continue;
@@ -133,14 +133,24 @@ void readThread(int serial_fd, int spi_fd) {
 
             if (line.find("END_DEBUGMODE_106") != std::string::npos) {
                 inImage = false;
-                if ((int)image.size() == ROWS * COLS) {
-                    printImage(image);
-                    sendImageSPI(spi_fd, image);
-                    std::cout << ">>> Image forwarded to SPI (" 
-                              << image.size() << " pixels)\n";
+                if ((int)images.size() == 2 * ROWS * COLS) {
+                    for (int imgIdx = 0; imgIdx <2; ++imgIdx) {
+
+                        std::vector<int16_t> img(
+                            images.begin() + imgIdx * ROWS * COLS,
+                            images.begin() + (imgIdx + 1) * ROWS * COLS
+                        );
+
+                        std::cout << "\n=== Image " << imgIdx << " ===\n";
+
+                        printImage(img);
+                        sendImageSPI(spi_fd, img);
+                    }
+                    std::cout << ">>> Stereo Image pair forwarded to SPI (" 
+                              << images.size() << " pixels total)\n";
                 } else {
-                    std::cerr << "Incomplete image: got "
-                              << image.size() << " values\n";
+                    std::cerr << "Incomplete stereo image: got "
+                              << images.size() << " values\n";
                 }
                 continue;
             }
@@ -149,8 +159,8 @@ void readThread(int serial_fd, int spi_fd) {
 
             std::stringstream ss(line);
             int val;
-            while (ss >> val && image.size() < ROWS * COLS)
-                image.push_back((int16_t)val);
+            while (ss >> val && images.size() < 2 * ROWS * COLS)
+                images.push_back((int16_t)val);
         }
     }
 }
