@@ -12,14 +12,21 @@
 #include <sys/ioctl.h>
 #include <linux/spi/spidev.h>
 
+#include <opencv2/opencv.hpp>
+#include <mutex>
+
 // ---------------- CONFIG ----------------
 static const int ROWS = 72;
 static const int COLS = 72;
 static const int BAUDRATE = B115200;
 static const char *SPI_DEV = "/dev/spidev0.0";
-static const uint32_t SPI_SPEED = 16000000;      // OH SNAPPPP
+static const uint32_t SPI_SPEED = 8000000;      // OH SNAPPPP
 static const uint8_t SPI_MODE = 3;
 static const uint8_t SPI_BITS = 8;
+
+std::mutex frameMutex;
+std::vector<int16_t> stereoFrame;
+std::atomic<bool> newFrame(false);
 
 // ----------------------------------------
 std::atomic<bool> running(true);
@@ -103,6 +110,23 @@ void printImage(const std::vector<int16_t>& img) {
     }
 }
 
+// -------------------- OpenCV ---------------
+cv::Mat makeStereoDisplay(const std::vector<int16_t>& stereo) {
+    cv::Mat left16(ROWS, COLS, CV_16SC1, (void*)(stereo.data()));
+    cv::Mat right16(ROWS, COLS, CV_16SC1, (void*)(stereo.data() + ROWS * COLS));
+
+    cv::Mat left8, right8;
+    cv::normalize(left16, left8, 0, 255, cv::NORM_MINMAX);
+    cv::normalize(right16, right8, 0, 255, cv::NORM_MINMAX);
+    left8.convertTo(left8, CV_8UC1);
+    right8.convertTo(right8, CV_8UC1);
+
+    cv::Mat stereo8;
+    cv::hconcat(left8, right8, stereo8);
+
+    return stereo8;
+}
+
 // ---------------- SERIAL READ THREAD ----------------
 void readThread(int serial_fd, int spi_fd) {
     std::string buffer;
@@ -133,17 +157,25 @@ void readThread(int serial_fd, int spi_fd) {
 
             if (line.find("END_DEBUGMODE_106") != std::string::npos) {
                 inImage = false;
-                if ((int)images.size() == 2 * ROWS * COLS) {
-                    for (int imgIdx = 0; imgIdx <2; ++imgIdx) {
 
+                if ((int)images.size() == 2 * ROWS * COLS) {
+                
+                    // Hand off stereo frame to main thread
+                    {
+                        std::lock_guard<std::mutex> lock(frameMutex);
+                        stereoFrame = images;       // copy once per frame
+                        newFrame.store(true);
+                    }
+                
+                    for (int imgIdx = 0; imgIdx <2; ++imgIdx) {
                         std::vector<int16_t> img(
                             images.begin() + imgIdx * ROWS * COLS,
                             images.begin() + (imgIdx + 1) * ROWS * COLS
                         );
 
-                        std::cout << "\n=== Image " << imgIdx << " ===\n";
+                        // std::cout << "\n=== Image " << imgIdx << " ===\n";
 
-                        printImage(img);
+                        // printImage(img);
                         sendImageSPI(spi_fd, img);
                     }
                     std::cout << ">>> Stereo Image pair forwarded to SPI (" 
@@ -189,9 +221,32 @@ int main() {
     std::thread reader(readThread, serial_fd, spi_fd);
 
     std::string cmd;
-    while (std::getline(std::cin, cmd)) {
-        cmd += "\n";
-        write(serial_fd, cmd.c_str(), cmd.size());
+
+    while (running.load()) {
+        while (std::getline(std::cin, cmd)) {
+            cmd += "\n";
+            write(serial_fd, cmd.c_str(), cmd.size());
+        }
+
+        // Display new stereo frame if avialable
+        if (newFrame.load()) {
+            std::vector<int16_t> localCopy;
+            {
+                std::lock_guard<std::mutex> lock(frameMutex);
+                localCopy = stereoFrame;
+                newFrame.store(false);
+            }
+
+            cv::Mat disp = makeStereoDisplay(localCopy);
+            cv::imshow("Stereo Image", disp);
+        }
+
+        // GOOEY event + keyboard handling
+        int key = cv::waitKey(1);
+        if (key == 'q' || key == 27){
+            cv::destroyAllWindows();
+            break;
+        }
     }
 
     running.store(false);
