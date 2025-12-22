@@ -27,8 +27,6 @@ static const uint8_t SPI_BITS = 8;
 std::mutex frameMutex;
 std::vector<int16_t> stereoFrame;
 std::atomic<bool> newFrame(false);
-
-// ----------------------------------------
 std::atomic<bool> running(true);
 
 // ---------------- SERIAL HELPERS ----------------
@@ -197,6 +195,15 @@ void readThread(int serial_fd, int spi_fd) {
     }
 }
 
+// -----------------STDIN THREAD -------------
+void stdinThread(int serial_fd){
+    std::string cmd;
+    while (std::getline(std::cin, cmd)) {
+        cmd += "\n";
+        write(serial_fd, cmd.c_str(), cmd.size());
+    }
+}
+
 // ---------------- MAIN ----------------
 int main() {
     auto ports = findACMports();
@@ -219,14 +226,10 @@ int main() {
     }
 
     std::thread reader(readThread, serial_fd, spi_fd);
+    std::thread stdinReader(stdinThread, serial_fd);
 
-    std::string cmd;
-
-    while (running.load()) {
-        while (std::getline(std::cin, cmd)) {
-            cmd += "\n";
-            write(serial_fd, cmd.c_str(), cmd.size());
-        }
+    while (running.load()) {          // running.load()
+        // std::cout << "ENTERED WHILE running load.\n";
 
         // Display new stereo frame if avialable
         if (newFrame.load()) {
@@ -239,6 +242,7 @@ int main() {
 
             cv::Mat disp = makeStereoDisplay(localCopy);
             cv::imshow("Stereo Image", disp);
+            std::cout << "LINE AFTER IMSHOW.\n";
         }
 
         // GOOEY event + keyboard handling
@@ -250,6 +254,8 @@ int main() {
     }
 
     running.store(false);
+    // newFrame does not need clearing; no more frames will be produced
+    stdinReader.join();
     reader.join();
     close(serial_fd);
     close(spi_fd);
