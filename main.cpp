@@ -228,6 +228,9 @@ int main() {
     std::thread reader(readThread, serial_fd, spi_fd);
     std::thread stdinReader(stdinThread, serial_fd);
 
+    cv::namedWindow("Stereo Image", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Stereo Image", 1200, 600);
+
     while (running.load()) {          // running.load()
         // std::cout << "ENTERED WHILE running load.\n";
 
@@ -241,7 +244,10 @@ int main() {
             }
 
             cv::Mat disp = makeStereoDisplay(localCopy);
-            cv::imshow("Stereo Image", disp);
+            cv::line(disp, cv::Point(COLS, 0), cv::Point(COLS, ROWS), cv::Scalar(255), 1);
+            cv::Mat dispBig;
+            cv::resize(disp, dispBig, cv::Size(), 8.0, 8.0, cv::INTER_NEAREST);
+            cv::imshow("Stereo Image", dispBig);
             std::cout << "LINE AFTER IMSHOW.\n";
         }
 
