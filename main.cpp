@@ -244,6 +244,7 @@ int main() {
             }
 
             cv::Mat disp = makeStereoDisplay(localCopy);
+            cv::bitwise_not(disp, disp);
             cv::line(disp, cv::Point(COLS, 0), cv::Point(COLS, ROWS), cv::Scalar(255), 1);
             cv::Mat dispBig;
             cv::resize(disp, dispBig, cv::Size(), 8.0, 8.0, cv::INTER_NEAREST);
