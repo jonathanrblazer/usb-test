@@ -15,6 +15,13 @@
 #include <opencv2/opencv.hpp>
 #include <mutex>
 
+#define MOCK_HARDWARE
+
+#ifdef MOCK_HARDWARE
+#include "serial_mock.h"
+#include "spi_mock.h"
+#endif
+
 // ---------------- CONFIG ----------------
 static const int ROWS = 72;
 static const int COLS = 72;
@@ -57,20 +64,30 @@ int configureSerial(int fd) {
 
 // ---------------- SPI HELPERS ----------------
 int openSPI() {
+    #ifdef MOCK_HARDWARE
+    std::cout << "[MOCK] openSPI()\n";
+    return 1;   // dummy FD
+    #else
     int fd = open(SPI_DEV, O_WRONLY);
     if (fd < 0) return -1;
     ioctl(fd, SPI_IOC_WR_MODE, &SPI_MODE);
     ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &SPI_BITS);
     ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &SPI_SPEED);
     return fd;
+    #endif
 }
 
 void sendImageSPI(int fd, const std::vector<int16_t>& img) {
+
+    #ifdef MOCK_HARDWARE
+    size_t total = img.size() * sizeof(int16_t);
+    std::cout << "[SPI MOCK] Would send " << total << " bytes\n";
+    #else
     const uint8_t* p =
         reinterpret_cast<const uint8_t*>(img.data());
     size_t total = img.size() * sizeof(int16_t);
 
-    const size_t CHUNK = 2592;  // 4096 bytes is the limit
+    const size_t CHUNK = 2592;
     size_t offset = 0;
 
     std::cout << "SPI sending image in chunks, total "
@@ -95,7 +112,9 @@ void sendImageSPI(int fd, const std::vector<int16_t>& img) {
     }
 
     std::cout << "SPI image sent OK\n";
+    #endif
 }
+
 
 
 // ---------------- IMAGE PRINT ----------------
@@ -127,6 +146,15 @@ cv::Mat makeStereoDisplay(const std::vector<int16_t>& stereo) {
 
 // ---------------- SERIAL READ THREAD ----------------
 void readThread(int serial_fd, int spi_fd) {
+    #ifdef MOCK_HARDWARE
+    // In mock mode, don't generate frames here.
+    // The main thread will generate + display one frame per ENTER.
+    while (running.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return;
+    #endif
+
     std::string buffer;
     char tmp[512];
 
@@ -206,6 +234,12 @@ void stdinThread(int serial_fd){
 
 // ---------------- MAIN ----------------
 int main() {
+
+    #ifdef MOCK_HARDWARE
+    int serial_fd = -1;
+    int spi_fd = openSPI();
+    std::cout << "[MOCK] Running without real serial or SPI\n";
+    #else
     auto ports = findACMports();
     if (ports.empty()) {
         std::cerr << "No ttyACM devices found.\n";
@@ -224,40 +258,80 @@ int main() {
         std::cerr << "Failed to open SPI.\n";
         return 1;
     }
+    #endif
+
+    #ifdef MOCK_HARDWARE
+    std::cout << "\n=== CM5 Stereo App Ready ===\n"
+            << "Press ENTER to begin, 'q' to quit.\n";
+    std::cin.get();
+    #endif
 
     std::thread reader(readThread, serial_fd, spi_fd);
+    #ifndef MOCK_HARDWARE
     std::thread stdinReader(stdinThread, serial_fd);
+    #endif
+
+    cv::namedWindow("Stereo Image", cv::WINDOW_NORMAL);
+    cv::resizeWindow("Stereo Image", 1200, 600);
 
     while (running.load()) {          // running.load()
-        // std::cout << "ENTERED WHILE running load.\n";
+        
+        std::cout << "\nPress ENTER to process next frame (q + ENTER to quit)...";
+        char ch = std::cin.get();
 
-        // Display new stereo frame if avialable
-        if (newFrame.load()) {
-            std::vector<int16_t> localCopy;
+        if (ch == 'q') {
+            break;
+        }
+
+        std::vector<int16_t> localCopy;
+
+        #ifdef MOCK_HARDWARE
+            // Generate exactly ONE stereo frame per ENTER press.
+            localCopy = generateDummyStereoFrame(ROWS, COLS);
+
+            {
+                std::lock_guard<std::mutex> lock(frameMutex);
+                stereoFrame = localCopy;   // keep "most recent" cached
+                newFrame.store(false);
+            }
+
+        #else
+            // Wait until a new frame arrives from the serial thread
+            while (!newFrame.load() && running.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (!running.load()) break;
+
             {
                 std::lock_guard<std::mutex> lock(frameMutex);
                 localCopy = stereoFrame;
                 newFrame.store(false);
             }
+        #endif
 
-            cv::Mat disp = makeStereoDisplay(localCopy);
-            cv::imshow("Stereo Image", disp);
-            std::cout << "LINE AFTER IMSHOW.\n";
-        }
+        cv::Mat disp = makeStereoDisplay(localCopy);
 
-        // GOOEY event + keyboard handling
+        cv::Mat dispBig;
+        cv::resize(disp, dispBig, cv::Size(), 3.0, 3.0, cv::INTER_NEAREST);
+        
+        cv::imshow("Stereo Image", dispBig);
         int key = cv::waitKey(1);
-        if (key == 'q' || key == 27){
+
+        if (key == 27) {
             cv::destroyAllWindows();
             break;
         }
     }
 
     running.store(false);
-    // newFrame does not need clearing; no more frames will be produced
+
+    #ifndef MOCK_HARDWARE
     stdinReader.join();
-    reader.join();
     close(serial_fd);
+    #endif
+
+    reader.join();
     close(spi_fd);
+
     return 0;
 }
