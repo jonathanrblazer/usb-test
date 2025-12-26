@@ -1,7 +1,7 @@
 # --------------------------------------
 # Project
 # --------------------------------------
-TARGET := StereoOpenCV
+TARGET := StereoOpenCV2
 SRCS   := main.cpp
 OBJS   := $(SRCS:.cpp=.o)
 

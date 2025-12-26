@@ -610,6 +610,13 @@ void printStereoDisparityGrid(const Stereo& ST)
     std::cout << std::flush;
 }
 
+void stdinThread(int serial_fd){
+    std::string cmd;
+    while (std::getline(std::cin, cmd)) {
+        cmd += "\n";
+        write(serial_fd, cmd.c_str(), cmd.size());
+    }
+}
 
 // ============================================================
 // MAIN
@@ -631,6 +638,7 @@ int main() {
         return 1;
 
     std::thread reader(readThread, serial_fd, spi_fd);
+    std::thread stdinReader(stdinThread, serial_fd);
 
     cv::namedWindow("Stereo", cv::WINDOW_NORMAL);
     cv::resizeWindow("Stereo", 1200, 600);
@@ -660,7 +668,7 @@ int main() {
 
             cv::Mat disp = makeStereoDisplay(localCopy);
             cv::bitwise_not(disp, disp);
-            cv::resize(disp, disp, {}, 8.0, 8.0, cv::INTER_NEAREST);
+            cv::resize(disp, disp, {}, 3.0, 3.0, cv::INTER_NEAREST);
             cv::imshow("Stereo", disp);
         }
 
