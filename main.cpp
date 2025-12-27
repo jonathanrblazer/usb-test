@@ -668,7 +668,7 @@ int main() {
 
             cv::Mat disp = makeStereoDisplay(localCopy);
             cv::bitwise_not(disp, disp);
-            cv::resize(disp, disp, {}, 3.0, 3.0, cv::INTER_NEAREST);
+            cv::resize(disp, disp, {}, 6.0, 6.0, cv::INTER_NEAREST);
             cv::imshow("Stereo", disp);
         }
 
