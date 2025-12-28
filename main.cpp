@@ -524,6 +524,76 @@ cv::Mat makeStereoDisplay(const std::vector<int16_t>& stereo) {
     return stereo8;
 }
 
+cv::Mat makeLeftDisplayWithDisparity(
+    const std::vector<int16_t>& stereo,
+    const Stereo& ST,
+    int scale = 12
+) {
+    // --- extract LEFT image ---
+    cv::Mat left16(ROWS, COLS, CV_16SC1, (void*)stereo.data());
+
+    cv::Mat left8;
+    cv::normalize(left16, left8, 0, 255, cv::NORM_MINMAX);
+    left8.convertTo(left8, CV_8UC1);
+
+    // --- upscale  ---
+    cv::Mat up;
+    cv::resize(
+        left8,
+        up,
+        cv::Size(),
+        scale,
+        scale,
+        cv::INTER_NEAREST
+    );
+
+    // convert to color (for text and stuff)
+    cv::Mat color;
+    cv::bitwise_not(up, up);
+    cv::cvtColor(up, color, cv::COLOR_GRAY2BGR);
+
+    // ---- overlay disparity blocks ----
+    for (int b = 0; b < ST.m_numblocks; ++b) {
+
+        if (!(ST.m_Bvalid[b] & 0x80))
+            continue;
+
+        int r = ST.m_bm1 + ST.m_BM1[b];
+        int c = ST.m_bn1 + ST.m_BN1[b];
+
+        if (r < 0 || r >= ROWS || c < 0 || c >= COLS)
+            continue;
+
+        // scale coordinates
+        int rs = r * scale;
+        int cs = c * scale;
+
+        cv::Scalar col = (ST.m_Bvalid[b] & 0x20)
+                         ? cv::Scalar(0, 255, 0)
+                         : cv::Scalar(0, 165, 255);
+
+        // draw larger, readable markers
+        cv::circle(color, {cs, rs}, 4, col, -1);
+
+        char txt[16];
+        snprintf(txt, sizeof(txt), "%.2f", ST.m_BDN[b]);
+
+        cv::putText(
+            color,
+            txt,
+            {cs - 15, rs - 8},
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.45,     // readable now
+            col,
+            1,
+            cv::LINE_AA
+        );
+    }
+
+    return color;
+}
+
+
 // ============================================================
 // SERIAL READ THREAD
 // ============================================================
@@ -584,31 +654,52 @@ void printStereoDisparityGrid(const Stereo& ST)
 {
     constexpr int BLOCKSPERCOL = 3;
     constexpr int BLOCKSPERROW = 11;
+    constexpr int COLW = 9;   // column width
 
-    std::cout << "\nStereo Disparity (DN), blocks "
-              << BLOCKSPERCOL << " x " << BLOCKSPERROW << "\n";
+    auto bits8 = [](uint8_t v) {
+        std::string s;
+        for (int i = 7; i >= 0; --i)
+            s += (v & (1 << i)) ? '1' : '0';
+        return s;
+    };
+
+    std::cout << "\nStereo Disparity (DN) + Confidence Bits\n";
+    std::cout << "Blocks " << BLOCKSPERCOL
+              << " x " << BLOCKSPERROW << "\n\n";
 
     for (int br = 0; br < BLOCKSPERCOL; ++br) {
-        std::cout << "Row " << br << ": ";
+
+        // ---- disparity row ----
+        std::cout << "Row " << br << " D: ";
         for (int bc = 0; bc < BLOCKSPERROW; ++bc) {
             int b = br * BLOCKSPERROW + bc;
 
-            // Valid if calibration bit + most confidence bits passed
             bool valid = (ST.m_Bvalid[b] & 0x80);
 
             if (valid) {
-                std::cout << std::setw(7)
+                std::cout << std::setw(COLW)
                           << std::fixed << std::setprecision(2)
-                          << ST.m_BDN[b] << " ";
+                          << ST.m_BDN[b];
             } else {
-                std::cout << "   ---- ";
+                std::cout << std::setw(COLW)
+                          << "----";
             }
         }
         std::cout << "\n";
+
+        // ---- confidence bits row ----
+        std::cout << "Row " << br << " B: ";
+        for (int bc = 0; bc < BLOCKSPERROW; ++bc) {
+            int b = br * BLOCKSPERROW + bc;
+            std::cout << std::setw(COLW)
+                      << bits8((uint8_t)ST.m_Bvalid[b]);
+        }
+        std::cout << "\n\n";
     }
 
     std::cout << std::flush;
 }
+
 
 void stdinThread(int serial_fd){
     std::string cmd;
@@ -641,7 +732,7 @@ int main() {
     std::thread stdinReader(stdinThread, serial_fd);
 
     cv::namedWindow("Stereo", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Stereo", 1200, 600);
+    cv::resizeWindow("Stereo", 800, 800);
 
     Stereo ST;
     ST.Initialize();
@@ -666,10 +757,10 @@ int main() {
             
             printStereoDisparityGrid(ST);
 
-            cv::Mat disp = makeStereoDisplay(localCopy);
-            cv::bitwise_not(disp, disp);
-            cv::resize(disp, disp, {}, 6.0, 6.0, cv::INTER_NEAREST);
+            cv::Mat disp = makeLeftDisplayWithDisparity(localCopy, ST);
+            // HAPPENING INSIDE HELPER - cv::resize(disp, disp, {}, 6.0, 6.0, cv::INTER_NEAREST);
             cv::imshow("Stereo", disp);
+
         }
 
         if (cv::waitKey(1) == 'q')
