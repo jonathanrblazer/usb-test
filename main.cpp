@@ -810,6 +810,7 @@ int main() {
             // HAPPENING INSIDE HELPER - cv::resize(disp, disp, {}, 6.0, 6.0, cv::INTER_NEAREST);
             tdisp0 = SteadyClock::now();   // PROFILING
             cv::imshow("Stereo", disp);
+
         }
 
         if (cv::waitKey(1) == 'q')
