@@ -3,7 +3,15 @@
 # --------------------------------------
 TARGET := StereoOpenCV2
 SRCS   := main.cpp
-OBJS   := $(SRCS:.cpp=.o)
+
+# Build directory
+BUILD_DIR := build
+
+# Objects live in build/
+OBJS := $(SRCS:%.cpp=$(BUILD_DIR)/%.o)
+
+# Final executable path
+TARGET_PATH := $(BUILD_DIR)/$(TARGET)
 
 # --------------------------------------
 # Compiler
@@ -32,19 +40,26 @@ LDFLAGS := -pthread
 # --------------------------------------
 # Build rules
 # --------------------------------------
-all: $(TARGET)
+all: $(TARGET_PATH)
 
-$(TARGET): $(OBJS)
+# Link step
+$(TARGET_PATH): $(OBJS)
+	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(OBJS) -o $@ $(LDFLAGS) $(OPENCV_LIBS)
 
-%.o: %.cpp
+# Compile step (puts .o in build/)
+$(BUILD_DIR)/%.o: %.cpp
+	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# --------------------------------------
+# Utilities
+# --------------------------------------
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -rf $(BUILD_DIR)
 
-run: $(TARGET)
-	./$(TARGET)
+run: $(TARGET_PATH)
+	./$(TARGET_PATH)
 
 debug:
 	$(MAKE) BUILD=debug
