@@ -28,7 +28,7 @@
 static const int ROWS = 72;
 static const int COLS = 72;
 
-static const int BAUDRATE = B115200;
+static const int BAUDRATE = B2000000;
 static const char *SPI_DEV = "/dev/spidev0.0";
 static const uint32_t SPI_SPEED = 8000000;
 static const uint8_t SPI_MODE = 3;
@@ -42,6 +42,9 @@ std::mutex frameMutex;
 std::vector<int16_t> stereoFrame;
 std::atomic<bool> newFrame(false);
 std::atomic<bool> running(true);
+
+using SteadyClock = std::chrono::steady_clock;
+auto tdisp0 = SteadyClock::now();   // PROFILING
 
 // ============================================================
 // SERIAL HELPERS
@@ -524,11 +527,87 @@ cv::Mat makeStereoDisplay(const std::vector<int16_t>& stereo) {
     return stereo8;
 }
 
+cv::Mat makeLeftDisplayWithDisparity(
+    const std::vector<int16_t>& stereo,
+    const Stereo& ST,
+    int scale = 12
+) {
+    // --- extract LEFT image ---
+    cv::Mat left16(ROWS, COLS, CV_16SC1, (void*)stereo.data());
+
+    cv::Mat left8;
+    cv::normalize(left16, left8, 0, 255, cv::NORM_MINMAX);
+    left8.convertTo(left8, CV_8UC1);
+
+    // --- upscale  ---
+    cv::Mat up;
+    cv::resize(
+        left8,
+        up,
+        cv::Size(),
+        scale,
+        scale,
+        cv::INTER_NEAREST
+    );
+
+    // convert to color (for text and stuff)
+    cv::Mat color;
+    cv::bitwise_not(up, up);
+    cv::cvtColor(up, color, cv::COLOR_GRAY2BGR);
+
+    // ---- overlay disparity blocks ----
+    for (int b = 0; b < ST.m_numblocks; ++b) {
+
+        if (!(ST.m_Bvalid[b] & 0x80))
+            continue;
+
+        int r = ST.m_bm1 + ST.m_BM1[b];
+        int c = ST.m_bn1 + ST.m_BN1[b];
+
+        if (r < 0 || r >= ROWS || c < 0 || c >= COLS)
+            continue;
+
+        // scale coordinates
+        int rs = r * scale;
+        int cs = c * scale;
+
+        cv::Scalar col = (ST.m_Bvalid[b] & 0x20)
+                         ? cv::Scalar(0, 255, 0)
+                         : cv::Scalar(0, 165, 255);
+
+        // draw larger, readable markers
+        cv::circle(color, {cs, rs}, 4, col, -1);
+
+        char txt[16];
+        snprintf(txt, sizeof(txt), "%.2f", ST.m_BDN[b]);
+
+        cv::putText(
+            color,
+            txt,
+            {cs - 15, rs - 8},
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.45,     // readable now
+            col,
+            1,
+            cv::LINE_AA
+        );
+    }
+
+    return color;
+}
+
+
 // ============================================================
 // SERIAL READ THREAD
 // ============================================================
 
 void readThread(int serial_fd, int spi_fd) {
+    // PROFILING
+    // using SteadyClock = std::chrono::steady_clock;
+    auto rx_t0 = SteadyClock::now();
+    int rx_frames = 0;
+    //////////////
+
     std::string buffer;
     char tmp[512];
     bool inImage = false;
@@ -559,6 +638,19 @@ void readThread(int serial_fd, int spi_fd) {
                         stereoFrame = images;
                         newFrame.store(true);
                     }
+
+                    // PROFILING
+                    rx_frames++;
+                    auto now = SteadyClock::now();
+                    auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(now - rx_t0).count();
+
+                    if (dt >= 1000) {
+                        std::cout << "[RX] " << rx_frames << " frames/sec\n";
+                        rx_frames = 0;
+                        rx_t0 = now;
+                    }
+                    //////////////
+
                     for (int imgIdx = 0; imgIdx < 2; ++imgIdx) {
                         std::vector<int16_t> img(
                             images.begin() + imgIdx * ROWS * COLS,
@@ -584,31 +676,52 @@ void printStereoDisparityGrid(const Stereo& ST)
 {
     constexpr int BLOCKSPERCOL = 3;
     constexpr int BLOCKSPERROW = 11;
+    constexpr int COLW = 9;   // column width
 
-    std::cout << "\nStereo Disparity (DN), blocks "
-              << BLOCKSPERCOL << " x " << BLOCKSPERROW << "\n";
+    auto bits8 = [](uint8_t v) {
+        std::string s;
+        for (int i = 7; i >= 0; --i)
+            s += (v & (1 << i)) ? '1' : '0';
+        return s;
+    };
+
+    std::cout << "\nStereo Disparity (DN) + Confidence Bits\n";
+    std::cout << "Blocks " << BLOCKSPERCOL
+              << " x " << BLOCKSPERROW << "\n\n";
 
     for (int br = 0; br < BLOCKSPERCOL; ++br) {
-        std::cout << "Row " << br << ": ";
+
+        // ---- disparity row ----
+        std::cout << "Row " << br << " D: ";
         for (int bc = 0; bc < BLOCKSPERROW; ++bc) {
             int b = br * BLOCKSPERROW + bc;
 
-            // Valid if calibration bit + most confidence bits passed
             bool valid = (ST.m_Bvalid[b] & 0x80);
 
             if (valid) {
-                std::cout << std::setw(7)
+                std::cout << std::setw(COLW)
                           << std::fixed << std::setprecision(2)
-                          << ST.m_BDN[b] << " ";
+                          << ST.m_BDN[b];
             } else {
-                std::cout << "   ---- ";
+                std::cout << std::setw(COLW)
+                          << "----";
             }
         }
         std::cout << "\n";
+
+        // ---- confidence bits row ----
+        std::cout << "Row " << br << " B: ";
+        for (int bc = 0; bc < BLOCKSPERROW; ++bc) {
+            int b = br * BLOCKSPERROW + bc;
+            std::cout << std::setw(COLW)
+                      << bits8((uint8_t)ST.m_Bvalid[b]);
+        }
+        std::cout << "\n\n";
     }
 
     std::cout << std::flush;
 }
+
 
 void stdinThread(int serial_fd){
     std::string cmd;
@@ -623,6 +736,12 @@ void stdinThread(int serial_fd){
 // ============================================================
 
 int main() {
+    // PROFILING
+    // using SteadyClock = std::chrono::steady_clock;
+    auto fps_t0 = SteadyClock::now();
+    int fps_frames = 0;
+    //////
+
     auto ports = findACMports();
     if (ports.empty()) {
         std::cerr << "No ttyACM devices found\n";
@@ -641,7 +760,7 @@ int main() {
     std::thread stdinReader(stdinThread, serial_fd);
 
     cv::namedWindow("Stereo", cv::WINDOW_NORMAL);
-    cv::resizeWindow("Stereo", 1200, 600);
+    cv::resizeWindow("Stereo", 800, 800);
 
     Stereo ST;
     ST.Initialize();
@@ -657,23 +776,47 @@ int main() {
                 newFrame.store(false);
             }
 
+            // PROFILING
+            fps_frames++;
+            auto now = SteadyClock::now();
+            auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(now - fps_t0).count();
+
+            if (dt >= 1000) {
+                std::cout << "[FPS] " << fps_frames << " fps\n";
+                fps_frames = 0;
+                fps_t0 = now;
+            }
+            ///////////
+
             short* left  = localCopy.data();
             short* right = localCopy.data() + ROWS * COLS;
             ST.LinkImageArrays(right, left);
+
+            // PROFILING
+            auto t0 = SteadyClock::now();
+            ST.StereoBlockMatchBank(-1);
+            auto t1 = SteadyClock::now();
+
+            double stereo_ms =
+                std::chrono::duration<double, std::milli>(t1 - t0).count();
+            //////////////////////
 
             // ---- stereo runs here ----
             ST.StereoBlockMatchBank(-1);        // TODO: argument not used
             
             printStereoDisparityGrid(ST);
 
-            cv::Mat disp = makeStereoDisplay(localCopy);
-            cv::bitwise_not(disp, disp);
-            cv::resize(disp, disp, {}, 3.0, 3.0, cv::INTER_NEAREST);
+            cv::Mat disp = makeLeftDisplayWithDisparity(localCopy, ST);
+            // HAPPENING INSIDE HELPER - cv::resize(disp, disp, {}, 6.0, 6.0, cv::INTER_NEAREST);
+            tdisp0 = SteadyClock::now();   // PROFILING
             cv::imshow("Stereo", disp);
         }
 
         if (cv::waitKey(1) == 'q')
             break;
+        auto tdisp1 = SteadyClock::now();   // PROFILING
+        double display_ms =             // PROFILING
+            std::chrono::duration<double, std::milli>(tdisp1 - tdisp0).count();
     }
 
     running.store(false);
